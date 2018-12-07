@@ -34,13 +34,13 @@ class encoder_naive(BasicBlock):
 class encoder_bi(BasicBlock):
     '''implementation of bi-lstm using bidirectional_dynamic_rnn'''
 
-    def __init__(self, hidden_units, name=None):
+    def __init__(self, hidden_units, cell_type='lstm', name=None):
         name = 'bi_encoder' if name is None else name
         super(encoder_bi, self).__init__(hidden_units=hidden_units, name=name)
 
         with tf.variable_scope(self.name, reuse=False):
-            encoder_fw_cells = [tf.nn.rnn_cell.LSTMCell(size, use_peepholes=False) for size in self.hidden_units]
-            encoder_bw_cells = [tf.nn.rnn_cell.LSTMCell(size, use_peepholes=False) for size in self.hidden_units]
+            encoder_fw_cells = gen_rnn_cells(cell_type, hidden_units)
+            encoder_bw_cells = gen_rnn_cells(cell_type, hidden_units)
             self.encoder_fw_stacked_cells = tf.nn.rnn_cell.MultiRNNCell(encoder_fw_cells)
             self.encoder_bw_stacked_cells = tf.nn.rnn_cell.MultiRNNCell(encoder_bw_cells)
         

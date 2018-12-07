@@ -29,14 +29,14 @@ def bn(x, is_training, name):
 										is_training=is_training,
 										scope=name)
 
-def spectral_norm(w, iteration=1):
+def spectral_norm(w, iteration=1, name="sn"):
 	'''
 	Ref: https://github.com/taki0112/Spectral_Normalization-Tensorflow/blob/65218e8cc6916d24b49504c337981548685e1be1/spectral_norm.py
 	'''
 	w_shape = w.shape.as_list() # [A, B, C]
 	w = tf.reshape(w, [-1, w_shape[-1]]) # [AB, C]
 
-	u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
+	u = tf.get_variable(name+"_u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
 
 	u_hat = u # [1, C]
 	v_hat = None 
@@ -93,7 +93,7 @@ def conv2d(x, channel, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='
 				initializer=tf.truncated_normal_initializer(stddev=stddev))
 		biases = tf.get_variable('biases', shape=[channel], initializer=tf.zeros_initializer())
         if sn:
-            w = spectral_norm(w)
+            w = spectral_norm(w, name=name+"_sn")
             
 	conv = tf.nn.conv2d(x, w, strides=[1, d_h, d_w, 1], padding='VALID')
 	conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())

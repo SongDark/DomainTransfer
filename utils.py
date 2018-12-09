@@ -100,13 +100,12 @@ def conv2d(x, channel, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='
 	return conv
 
 def deconv2d(x, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='deconv2d'):
-    # output_shape: [height, width, output_channels, in_channels]
+    # output_shape: [N, H, W, C], the output_shape of deconv op
 	with tf.variable_scope(name):
-		w = tf.get_variable('weights', [k_h, k_w, output_shape[-1], x.get_shape()[-1]],
-					initializer=tf.random_normal_initializer(stddev=stddev))
-        biases = tf.get_variable('biases', shape=[output_shape[-1]], initializer=tf.zeros_initializer())
+		w = tf.get_variable('weights', [k_h, k_w, output_shape[-1], x.get_shape()[-1]], initializer=tf.random_normal_initializer(stddev=stddev))
+		biases = tf.get_variable('biases', shape=[output_shape[-1]], initializer=tf.zeros_initializer())
         if sn:
-            w = spectral_norm(w)
+            w = spectral_norm(w, name="sn")
             
 	deconv = tf.nn.conv2d_transpose(x, w, output_shape=output_shape, strides=[1, d_h, d_w, 1], padding='VALID')
 	deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())

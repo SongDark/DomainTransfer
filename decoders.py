@@ -7,7 +7,7 @@
 '''
 
 import tensorflow as tf
-from utils import BasicBlock, gen_rnn_cells
+from utils import BasicBlock, gen_rnn_cells, dense
 
 class dynamic_decoder(BasicBlock):
     '''
@@ -22,19 +22,15 @@ class dynamic_decoder(BasicBlock):
 
         # Output Projection
         with tf.variable_scope(self.name):
-            self.W_out_proj = tf.get_variable('W_out_proj', shape=[self.hidden_units[-1], self.output_depth], initializer=tf.random_uniform_initializer(-1.0, 1.0), dtype=tf.float32)
-            self.b_out_proj = tf.get_variable('b_out_proj', shape=[self.output_depth], initializer=tf.zeros_initializer(), dtype=tf.float32)
-
             self.decoder_rnn_layers = gen_rnn_cells(cell_type, hidden_units)
             self.decoder_multi_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(self.decoder_rnn_layers)
 
-    def __call__(self, encoder_final_state, lens):
+    def __call__(self, embedding, lens, with_state=True):
         # for now just assume that 'lens' is available 
-        # 'encoder_final_state' should be either a tuple of LSTMStateTuple or a LSTMStateTuple, element size [bz, H]
-        # 'encoder_final_state' should have the same width as hidden_unit[0]
+        # embedding [bz, dim]
 
         # batch_size, _ = encoder_final_state.c.shape
-        batch_size, _ = tf.unstack(tf.shape(encoder_final_state.c))
+        batch_size = embedding.get_shape().as_list()[0]
         eos_time_slice = tf.ones([batch_size, self.output_depth], dtype=tf.float32, name='EOS')
         pad_time_slice = tf.zeros([batch_size, self.output_depth], dtype=tf.float32, name='PAD')
         
@@ -45,9 +41,12 @@ class dynamic_decoder(BasicBlock):
             
             '''here's the key link of decoder's last state and decoder's inital state'''
             initial_cell_state = []
-            initial_cell_state.append(encoder_final_state) # [bz, H1]
-            for i in range(1, len(self.hidden_units)):
-                initial_cell_state.append(self.decoder_rnn_layers[i].zero_state(batch_size, dtype=tf.float32))
+            for i in range(len(self.hidden_units)):
+                '''project embedding to each layers initial state'''
+                state = dense(embedding, self.hidden_units[i], name='dense_input_{}'.format(i))
+                initial_cell_state.append(tf.nn.rnn_cell.LSTMStateTuple(
+                    c=state, 
+                    h=tf.zeros_like(state)))
             
             return (initial_elements_finished, 
                     initial_input,
@@ -56,7 +55,7 @@ class dynamic_decoder(BasicBlock):
 
         def loop_fn_transition(time, cell_output, cell_state, loop_state):
             def get_next_input():
-                return tf.add(tf.matmul(cell_output, self.W_out_proj), self.b_out_proj)
+                return dense(cell_output, self.output_depth, name='dense_output')
             elements_finished = (lens <= time)
             finished = tf.reduce_all(elements_finished)
             inputs = tf.cond(finished, lambda:pad_time_slice, get_next_input)
@@ -81,4 +80,15 @@ class dynamic_decoder(BasicBlock):
             decoder_outputs_ta, decoder_final_state, _ = tf.nn.raw_rnn(self.decoder_multi_rnn_cell, loop_fn)
             decoder_outputs = decoder_outputs_ta.stack()
 
-        return decoder_outputs, decoder_final_state
+        with tf.variable_scope(self.name+"/rnn", reuse=True):
+            '''raw_rnn return cell_output, still need dense projection'''
+            # share the same variables
+            _, bz, d = decoder_outputs.get_shape().as_list()
+            decoder_outputs = tf.reshape(decoder_outputs, (-1, d))
+            decoder_outputs = dense(decoder_outputs, self.output_depth, name='dense_output')
+            decoder_outputs = tf.reshape(decoder_outputs, (-1, bz, self.output_depth))
+
+        if with_state:
+            return decoder_outputs, decoder_final_state
+        else:
+            return decoder_outputs

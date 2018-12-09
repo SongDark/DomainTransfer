@@ -84,7 +84,6 @@ class SeqDiscriminator_CNN(BasicBlock):
             elif self.mode == 1:
                 # Spectral Norm Conv
                 conv = conv2d(x, channel=18, k_h=13, k_w=2, d_h=1, d_w=1, sn=True, name='conv1') # [bz, 244, 2, 1]
-                tmp = conv
                 conv = lrelu(conv)
                 conv = tf.contrib.layers.max_pool2d(conv, kernel_size=[2,1], stride=[2,1], scope='maxpool1') # [bz, 122, 2, 1]
 
@@ -116,7 +115,4 @@ class SeqDiscriminator_CNN(BasicBlock):
                 y_c = dense(conv, self.class_num, name='C_dense') if self.class_num is not None else None
 
         return y_d, y_c
-
-
-
 

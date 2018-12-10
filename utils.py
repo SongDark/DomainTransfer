@@ -1,4 +1,7 @@
 import tensorflow as tf 
+import numpy as np
+from scipy.io import loadmat
+import os
 
 class BasicBlock(object):
     def __init__(self, hidden_units, name):
@@ -7,6 +10,26 @@ class BasicBlock(object):
     @property
     def vars(self):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.name)
+
+class BasicTrainFramework(object):
+	def __init__(self, batch_size, version):
+		self.batch_size = batch_size
+		self.version = version
+
+	def build_dirs(self):
+		self.log_dir = os.path.join('logs', self.version) 
+		self.model_dir = os.path.join('checkpoints', self.version)
+		self.fig_dir = os.path.join('figs', self.version)
+		for d in [self.log_dir, self.model_dir, self.fig_dir]:
+			if (d is not None) and (not os.path.exists(d)):
+				print "mkdir" + d
+				os.makedirs(d)
+	
+	def build_sess(self):
+		gpu_options = tf.GPUOptions(allow_growth=True)
+		self.sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+		self.sess.run(tf.global_variables_initializer())
+		self.saver = tf.train.Saver()
 
 def gen_rnn_cells(cell_type, hidden_units):
     if cell_type == 'rnn':
@@ -110,4 +133,66 @@ def deconv2d(x, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False,
 	deconv = tf.nn.conv2d_transpose(x, w, output_shape=output_shape, strides=[1, d_h, d_w, 1], padding='VALID')
 	deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
 	return deconv
+
+def zscore(seq):
+	# seq, [T,d]
+	mius = np.mean(seq, axis=0)
+	stds = np.mean(seq, axis=0)
+	return (seq - mius) / stds 
+
+def filtering(seq, window=3):
+	d = window // 2
+	res = []
+	for i,j in zip([0] * d + range(len(seq) - d), range(d, len(seq)) + [len(seq)] * d):
+		res.append(np.mean(seq[i:j+1, :], axis=0))
+	return np.asarray(res)
+
+def load(fs):
+	return [np.transpose(loadmat(f)['gest']) for f in fs]
+
+def get_slice(seqs, col1, col2):
+	return [seq[:, col1:col2] for seq in seqs]
+
+def preprocess(seqs):
+	return [zscore(filtering(seq)) for seq in seqs]
+
+def padding(minibatch, maxlen=None):
+	lens = map(len, minibatch)
+	dim = minibatch[0].shape[-1]
+	maxlen = maxlen or max(lens)
+	res = []
+	for i in range(len(minibatch)):
+		if len(minibatch[i]) > maxlen:
+			res.append(minibatch[i][:maxlen, :])
+		else:
+			res.append(np.concatenate([minibatch[i], np.zeros([maxlen-lens[i], dim])], axis=0))
+	return np.asarray(res)
+
+def get_class_type(fs):
+    res = []
+    for f in fs:
+        tmp = f.split('/')[-1].split('_')
+        if tmp[0] == 'num':
+            res.append(ord(tmp[1]) - ord('0'))
+        elif tmp[0] == 'upper':
+            res.append(ord(tmp[1]) - ord('A') + 10)
+        elif tmp[0] == 'lower':
+            res.append(ord(tmp[1]) - ord('a') + 36)
+        else:
+            raise ValueError('Invalid field {}.'.format(tmp[0]))
+    return res
+
+def one_hot_encode(ys, max_class):
+    res = np.zeros((len(ys), max_class), dtype=np.float32)
+    for i in range(len(ys)):
+        res[i][ys[i]] = 1.0
+    return res
+
+
+def shuffle_in_unison_scary(*args, **kwargs):
+	np.random.seed(kwargs['seed'])
+	rng_state = np.random.get_state()
+	for i in range(len(args)):
+		np.random.shuffle(args[i])
+		np.random.set_state(rng_state)
 

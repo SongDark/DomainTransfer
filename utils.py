@@ -22,7 +22,7 @@ class BasicTrainFramework(object):
 		self.fig_dir = os.path.join('figs', self.version)
 		for d in [self.log_dir, self.model_dir, self.fig_dir]:
 			if (d is not None) and (not os.path.exists(d)):
-				print "mkdir" + d
+				print "mkdir " + d
 				os.makedirs(d)
 	
 	def build_sess(self):
@@ -30,6 +30,45 @@ class BasicTrainFramework(object):
 		self.sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
 		self.sess.run(tf.global_variables_initializer())
 		self.saver = tf.train.Saver()
+	
+	def build_network(self):
+		self.D_logit_real = None 
+		self.D_logit_fake = None
+
+	def build_optimizer(self, **kwargs):
+		def get_item(self, key):
+			return self.__dict__[key]
+
+		if kwargs['gan_type'] == 'gan':
+			self.D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logit_real, labels=tf.ones_like(self.D_logit_real)))
+			self.D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logit_fake, labels=tf.zeros_like(self.D_logit_fake)))
+			self.D_loss = self.D_loss_real + self.D_loss_fake
+			self.G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logit_fake, labels=tf.ones_like(self.D_logit_fake)))
+			self.D_solver = tf.train.AdamOptimizer(learning_rate=kwargs['lr'], beta1=kwargs['beta1']).minimize(self.D_loss, var_list=kwargs['discriminator'].vars)
+			self.G_solver = tf.train.AdamOptimizer(learning_rate=kwargs['lr'], beta1=kwargs['beta1']).minimize(self.G_loss, var_list=kwargs['generator'].vars)
+		elif kwargs['gan_type'] == 'wgan':
+			self.D_loss_real = tf.reduce_mean(self.D_logit_real)
+			self.D_loss_fake = tf.reduce_mean(self.D_logit_fake)
+			self.D_loss = self.D_loss_real + self.D_loss_fake
+			self.G_loss = - self.D_loss_fake
+			self.D_clip = [var.assign(tf.clip_by_value(var, - kwargs['clip'], kwargs['clip'])) for var in kwargs['discriminator'].vars]
+			self.D_solver = tf.train.RMSPropOptimizer(learning_rate=kwargs['lr']).minimize(self.D_loss, var_list=kwargs['discriminator'].vars)
+			self.G_solver = tf.train.RMSPropOptimizer(learning_rate=kwargs['lr']).minimize(self.D_loss, var_list=kwargs['generator'].vars)
+
+	def load_model(self, checkpoint_dir, ckpt_name=None):
+		import re 
+		print "load checkpoints ..."
+		
+		ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+		if ckpt and ckpt.model_checkpoint_path:
+			ckpt_name = ckpt_name or os.path.basename(ckpt.model_checkpoint_path)
+			self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
+			counter = int(next(re.finditer("(\d+)(?!.*\d)",ckpt_name)).group(0))
+			print "Success to read {}".format(ckpt_name)
+			return True, counter
+		else:
+			print "Failed to find a checkpoint"
+			return False, 0
 
 def gen_rnn_cells(cell_type, hidden_units):
     if cell_type == 'rnn':
@@ -93,9 +132,9 @@ def linear(x, output_size, stddev=0.02, bias_start=0.0, name='linear'):
 
 	return tf.matmul(x,W) + bias
 
-def dense(x, output_size, stddev=0.02, bias_start=0.0, activation=None, name='dense'):
+def dense(x, output_size, stddev=0.02, bias_start=0.0, activation=None, reuse=False, name='dense'):
 	shape = x.get_shape().as_list()
-	with tf.variable_scope(name):
+	with tf.variable_scope(name, reuse=reuse):
 		W = tf.get_variable(
 			'weights', [shape[1], output_size], 
 			tf.float32, 
@@ -119,7 +158,9 @@ def conv2d(x, channel, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='
             w = spectral_norm(w, name=name+"_sn")
             
 	conv = tf.nn.conv2d(x, w, strides=[1, d_h, d_w, 1], padding='VALID')
-	conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())
+	N,_,W,C = conv.get_shape().as_list()
+	# conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())
+	conv = tf.reshape(tf.nn.bias_add(conv, biases), [N,-1,W,C])
 	return conv
 
 def deconv2d(x, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='deconv2d'):
@@ -137,7 +178,7 @@ def deconv2d(x, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False,
 def zscore(seq):
 	# seq, [T,d]
 	mius = np.mean(seq, axis=0)
-	stds = np.mean(seq, axis=0)
+	stds = np.std(seq, axis=0)
 	return (seq - mius) / stds 
 
 def filtering(seq, window=3):
@@ -196,3 +237,8 @@ def shuffle_in_unison_scary(*args, **kwargs):
 		np.random.shuffle(args[i])
 		np.random.set_state(rng_state)
 
+def logging_time(time_delta):
+	h = time_delta // 3600 
+	m = (time_delta - h*3600) // 60
+	s = time_delta - h*3600 - m*60
+	return  h, m, s

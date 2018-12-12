@@ -49,13 +49,22 @@ class SeqDiscriminator_RNN(BasicBlock):
 
 class SeqDiscriminator_CNN(BasicBlock):
     # requires 'NHWC' data format
-    def __init__(self, class_num=None, mode=0, name=None):
+    def __init__(self, class_num=None, mode=0, fixed_length=True, name=None):
         name = "Seq_Discriminator_CNN" if name is None else name 
         super(SeqDiscriminator_CNN, self).__init__(None, name)
         self.class_num = class_num
         self.mode = mode
+        self.fixed_length = fixed_length
     
-    def __call__(self, x, is_training=True, reuse=False):
+    def get_conv_lens(self, lens):
+        div = tf.floor_div 
+        if self.mode == 0 or self.mode == 1:
+            return div(div(div(lens - 12, 2) - 12, 2) - 11, 2)
+        elif self.mode == 2:
+            return div(div(lens - 12, 2) - 12, 2)
+    
+    def __call__(self, x, lens=None, is_training=True, reuse=False):
+        # lens is the length of original sequence
         with tf.variable_scope(self.name, reuse=reuse):
 
             if self.mode == 0:
@@ -74,13 +83,7 @@ class SeqDiscriminator_CNN(BasicBlock):
                 conv = bn(conv, is_training=is_training, name='bn_2')
                 conv = lrelu(conv, name='lrelu_2') 
                 conv = tf.contrib.layers.max_pool2d(conv, kernel_size=[2,1], stride=[2,1], scope='maxpool_2') # [bz, 22, 2, 24]
-                
-                conv = tf.layers.flatten(conv) # [bz, 1056]
-                conv = dense(conv, 128, activation=lrelu, name='fc') # [bz, 128]
-                
-                y_d = dense(conv, 1, name='D_dense')
-                y_c = dense(conv, self.class_num, name='C_dense') if self.class_num is not None else None
-            
+
             elif self.mode == 1:
                 # Spectral Norm Conv
                 conv = conv2d(x, channel=18, k_h=13, k_w=2, d_h=1, d_w=1, sn=True, name='conv1') # [bz, 244, 2, 1]
@@ -94,11 +97,6 @@ class SeqDiscriminator_CNN(BasicBlock):
                 conv = conv2d(conv, channel=24, k_h=12, k_w=1, d_h=1, d_w=1, sn=True, name='conv3') # [bz, 44, 2, 24]
                 conv = lrelu(conv) 
                 conv = tf.contrib.layers.max_pool2d(conv, kernel_size=[2,1], stride=[2,1], scope='maxpool3') # [bz, 22, 2, 24]
-
-                conv = tf.layers.flatten(conv)
-
-                y_d = dense(conv, 1, name='D_dense')
-                y_c = dense(conv, self.class_num, name='C_dense') if self.class_num is not None else None
             
             elif self.mode == 2:
                 # shallow
@@ -108,11 +106,29 @@ class SeqDiscriminator_CNN(BasicBlock):
                 
                 conv = conv2d(conv, channel=18, k_h=13, k_w=1, d_h=2, d_w=1, sn=True, name='conv2') # [bz, 91, 2, 18]
                 conv = lrelu(conv)
+            
+            if self.fixed_length:
+                conv = tf.layers.flatten(conv) # [bz, 1056]
+                conv = dense(conv, 128, activation=lrelu, name='fc') # [bz, 128]
+            else:
+                # mask-meanpooling for inputs of any length
+                assert lens is not None
+                lens = self.get_conv_lens(lens) # get lengths of the last layer's output
+                mask = tf.sequence_mask(lens)
+                mask = tf.expand_dims(tf.expand_dims(mask, -1), -1)
 
-                conv = tf.layers.flatten(conv)
+                conv = tf.multiply(conv, tf.to_float(mask))
+                conv = tf.reduce_sum(conv, axis=1) # [bz, 2, 24]
+                conv = tf.divide(conv, tf.to_float(tf.expand_dims(tf.expand_dims(lens, -1), -1))) # [bz, 2, 24]
+                conv = tf.layers.flatten(conv) 
+                
+            y_d = dense(conv, 1, name='D_dense')
+            if self.class_num:
+                y_c = dense(conv, self.class_num, name='C_dense')
+                y_c = tf.nn.softmax(y_c)
 
-                y_d = dense(conv, 1, name='D_dense')
-                y_c = dense(conv, self.class_num, name='C_dense') if self.class_num is not None else None
-
-        return y_d, y_c
+        if self.class_num:
+            return y_d, y_c
+        else:
+            return y_d
 

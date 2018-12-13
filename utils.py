@@ -158,21 +158,31 @@ def conv2d(x, channel, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='
             w = spectral_norm(w, name=name+"_sn")
             
 	conv = tf.nn.conv2d(x, w, strides=[1, d_h, d_w, 1], padding='VALID')
-	N,_,W,C = conv.get_shape().as_list()
+	# N,_,W,C = conv.get_shape().as_list()
 	# conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())
-	conv = tf.reshape(tf.nn.bias_add(conv, biases), [N,-1,W,C])
+	# conv = tf.reshape(tf.nn.bias_add(conv, biases), [N,-1,W,C])
+	conv = tf.nn.bias_add(conv, biases)
 	return conv
 
-def deconv2d(x, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='deconv2d'):
-    # output_shape: [N, H, W, C], the output_shape of deconv op
+def deconv2d(x, channel, k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02, sn=False, name='deconv2d'):
+    # output_shape: the output_shape of deconv op
+	def get_deconv_lens(H, k, d):
+		return tf.multiply(H, d) + k - 1
+
+	shape = tf.shape(x)
+	H, W = shape[1], shape[2]
+	N, _, _, C = x.get_shape().as_list()
 	with tf.variable_scope(name):
-		w = tf.get_variable('weights', [k_h, k_w, output_shape[-1], x.get_shape()[-1]], initializer=tf.random_normal_initializer(stddev=stddev))
-		biases = tf.get_variable('biases', shape=[output_shape[-1]], initializer=tf.zeros_initializer())
-        if sn:
-            w = spectral_norm(w, name="sn")
-            
-	deconv = tf.nn.conv2d_transpose(x, w, output_shape=output_shape, strides=[1, d_h, d_w, 1], padding='VALID')
-	deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
+		w = tf.get_variable('weights', [k_h, k_w, channel, x.get_shape()[-1]], initializer=tf.random_normal_initializer(stddev=stddev))
+		biases = tf.get_variable('biases', shape=[channel], initializer=tf.zeros_initializer())
+		if sn:
+			w = spectral_norm(w, name="sn")
+    
+	H1 = get_deconv_lens(H, k_h, d_h)
+	W1 = get_deconv_lens(W, k_w, d_w)
+	deconv = tf.nn.conv2d_transpose(x, w, output_shape=[N, H1, W1, channel], strides=[1, d_h, d_w, 1], padding='VALID')
+	deconv = tf.nn.bias_add(deconv, biases)
+
 	return deconv
 
 def zscore(seq):

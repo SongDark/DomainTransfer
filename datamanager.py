@@ -67,7 +67,7 @@ class datamanager(object):
             cur_pos = rest
         return cur_pos, get_pos
 
-    def __call__(self, batch_size, phase='train', mode='seq2seq', var_list=[]):
+    def __call__(self, batch_size, phase='train', maxlen=None, var_list=[]):
         if phase == 'train':
             self.train_cur_pos, get_pos = self.get_cur_pos(self.train_cur_pos, self.train_num, batch_size)
             cur_id = self.train_id[get_pos]
@@ -75,12 +75,20 @@ class datamanager(object):
             self.test_cur_pos, get_pos = self.get_cur_pos(self.test_cur_pos, self.test_num, batch_size)
             cur_id = self.test_id[get_pos]
         
-        def func(flag):
+        def get_closest_maxlen(L):
+            tmp = [((i*2+11)*2+12)*2+12 for i in range(1, 23)] + [256]
+            idx = np.argmin(np.abs(np.array(tmp) - L))
+            return tmp[idx+1]
+
+        def func(flag, maxlen=maxlen):
             if flag == 'lens':
-                return np.array(map(len, self.AccGyo[cur_id]))
+                lens = np.array(map(len, self.AccGyo[cur_id]))
+                lens = [get_closest_maxlen(L) for L in lens]
+                return lens
             elif flag == 'AccGyo' or flag == 'XYZ':
                 res = self.__dict__[flag][cur_id]
-                maxlen = max(map(len, res))
+                maxlen = maxlen or max(map(len, res))
+                maxlen = get_closest_maxlen(maxlen)
                 res = padding(res, maxlen)
                 if self.time_major:
                     res = np.transpose(res, (1,0,2))

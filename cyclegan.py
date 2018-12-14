@@ -3,6 +3,8 @@ import tensorflow as tf
 from utils import BasicTrainFramework, dense, logging_time
 from datamanager import datamanager
 from encoders import encoder_bi, encoder_naive
+from autoencoder import ConverterA_CNN, ConverterB_CNN
+from discriminators import SeqDiscriminator_CNN
 import time, os
 import numpy as np
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
@@ -245,9 +247,9 @@ class Double_CycleGAN(BasicTrainFramework):
 
         # solvers 
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-            self.ae_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.ae_loss, var_list=self.encoder.vars + self.decoder.vars)
-            self.D_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.D_loss, var_list=self.discriminator.vars)
-            self.G_solver = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5).minimize(self.G_loss, var_list=self.encoder.vars)
+            self.ae_solver = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5).minimize(self.ae_loss, var_list=self.encoder.vars + self.decoder.vars)
+            self.D_solver = tf.train.AdamOptimizer(learning_rate=5e-4, beta1=0.5).minimize(self.D_loss, var_list=self.discriminator.vars)
+            self.G_solver = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5).minimize(self.G_loss, var_list=self.encoder.vars)
     
     def build_summary(self):
         ae_loss_sum = tf.summary.scalar("ae_loss", self.ae_loss)
@@ -440,7 +442,6 @@ class CycleGAN(BasicTrainFramework):
         data_X['enX_outputs'], data_X['deX_outputs'] = self.sess.run([self.enX_outputs, self.deX_outputs], feed_dict=feed_dict)
         np.savez(os.path.join(self.fig_dir, "sample_epoch_{}.npz".format(epoch)), **data_X)
 
-
     def train(self, epoches=10):
         # summary writer
         self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
@@ -499,7 +500,135 @@ class CycleGAN(BasicTrainFramework):
 
             self.saver.save(self.sess, os.path.join(self.model_dir, 'CycleGAN.ckpt'), global_step=cnt)
             self.sample(epoch)  
+
+class CycleGAN_CNN(BasicTrainFramework):
+    def __init__(self, batch_size, version):
+        super(CycleGAN_CNN, self).__init__(batch_size, version)
+
+        self.encoder_X = ConverterA_CNN(name="encoder_cnn")
+        self.decoder_X = ConverterB_CNN(name="decoder_cnn")
+        self.discriminator = SeqDiscriminator_CNN(class_num=None, mode=1, fixed_length=False, name='discriminator')
+
+        self.data_X = datamanager(time_major=False, seed=19940610)
+        self.data_Y = datamanager(time_major=False, seed=19940610)
+        self.data_Y.shuffle_train(seed=19931028)
+
+        self.build_network()
+
+        self.build_sess()
+        self.build_dirs()
+    
+    def build_network(self):
+        self.build_placeholder()
+        self.build_ae()
+        self.build_gan()
+        self.build_optimizer()
+        self.build_summary()
+    
+    def build_placeholder(self):
+        with tf.variable_scope("placeholders"):
+            self.source_X = tf.placeholder(shape=(self.batch_size, None, 6, 1), dtype=tf.float32)
+            self.len_X = tf.placeholder(shape=(self.batch_size, ), dtype=tf.int32)
+            self.target_X = tf.placeholder(shape=(self.batch_size, None, 6, 1), dtype=tf.float32)
+            # self.label_X = tf.placeholder(shape=(self.batch_size, 62), dtype=tf.float32)
+
+            self.source_Y = tf.placeholder(shape=(self.batch_size, None, 3, 1), dtype=tf.float32)
+            self.len_Y = tf.placeholder(shape=(self.batch_size, ), dtype=tf.int32)
+        
+    def build_ae(self):
+        self.encoder_outputs = self.encoder_X(self.source_X, self.len_X)
+
+        self.decoder_outputs = self.decoder_X(self.encoder_outputs, self.len_X)
+        
+    def build_gan(self):
+        self.D_logit_real = self.discriminator(self.source_Y, self.len_Y, reuse=False)
+        self.D_logit_fake = self.discriminator(self.encoder_outputs, self.len_X, reuse=True)
+    
+    def build_optimizer(self):
+        # cycle consistency
+        self.ae_loss = tf.reduce_mean(tf.square(self.target_X - self.decoder_outputs))
+        
+        # wgan
+        self.D_loss_real = - tf.reduce_mean(self.D_logit_real)
+        self.D_loss_fake = tf.reduce_mean(self.D_logit_fake) 
+        self.D_loss = self.D_loss_real + self.D_loss_fake
+        self.G_loss = - self.D_loss_fake
+
+        # weights clipping
+        self.D_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in self.discriminator.vars]
+
+        # solvers 
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            self.ae_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.ae_loss, var_list=self.encoder_X.vars + self.decoder_X.vars)
+            self.D_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.D_loss, var_list=self.discriminator.vars)
+            self.G_solver = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5).minimize(self.G_loss, var_list=self.encoder_X.vars)
+
+    def build_summary(self):
+        ae_loss_sum = tf.summary.scalar("ae_loss", self.ae_loss)
+        d_loss_real_sum = tf.summary.scalar("d_loss_real", self.D_loss_real)
+        d_loss_fake_sum = tf.summary.scalar("d_loss_fake", self.D_loss_fake)
+        d_loss_sum = tf.summary.scalar("d_loss", self.D_loss)
+        g_loss_sum = tf.summary.scalar("g_loss", self.G_loss)
+
+        self.ae_sum = tf.summary.merge([ae_loss_sum])
+        self.g_sum = tf.summary.merge([d_loss_fake_sum, g_loss_sum])
+        self.d_sum = tf.summary.merge([d_loss_real_sum, d_loss_sum]) 
+    
+    def sample(self, epoch):
+        print "sample after epoch {}".format(epoch)
+        data = datamanager(time_major=False,seed=19940610)
+        data_X = data(self.batch_size, phase='train', var_list=["AccGyo", "lens", "labels", "XYZ"])
+        feed_dict={
+            self.source_X:data_X['AccGyo'][:,:,:,None],
+            self.len_X:data_X['lens']
+        }
+
+        data_X['enX_outputs'], data_X['deX_outputs'] = self.sess.run([self.encoder_outputs, self.decoder_outputs], feed_dict=feed_dict)
+        np.savez(os.path.join(self.fig_dir, "sample_epoch_{}.npz".format(epoch)), **data_X)
+
+    def train(self, epoches=10):
+        self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+
+        batches_per_epoch = self.data_X.train_num // self.batch_size
+
+        start_time = time.time()
+        for epoch in range(epoches):
+            for idx in range(batches_per_epoch):
+                cnt = batches_per_epoch * epoch + idx
+
+                X = self.data_X(self.batch_size, var_list=["lens", "AccGyo"])
+                Y = self.data_Y(self.batch_size, var_list=["lens", "XYZ"])
+
+                feed_dict = {
+                    self.source_X: X["AccGyo"][:,:,:,None],
+                    self.len_X: X["lens"],
+                    self.target_X: X["AccGyo"][:,:,:,None],
+
+                    self.source_Y: Y["XYZ"][:,:,:,None],
+                    self.len_Y: Y["lens"]
+                }
                 
+                # update cycle consistency & D network
+                self.sess.run([self.ae_solver, self.D_solver, self.D_clip], feed_dict=feed_dict)
+
+                # update G network
+                if (cnt - 1) % 1 == 0:
+                    self.sess.run(self.G_solver, feed_dict=feed_dict)
+                
+                if (cnt - 1) % 5 == 0:
+                    ae_sum, d_sum, g_sum, g_loss, d_loss, ae_loss = self.sess.run([self.ae_sum, self.d_sum, self.g_sum, self.G_loss, self.D_loss, self.ae_loss], feed_dict=feed_dict)
+                    self.writer.add_summary(ae_sum, cnt)
+                    self.writer.add_summary(d_sum, cnt)
+                    self.writer.add_summary(g_sum, cnt)
+                    h,m,s = logging_time(time.time() - start_time)
+                    print "Epoch: [%2d] [%4d/%4d] time: %3d:%3d:%3d, d_loss:%.5f, g_loss:%.5f, ae_loss:%.5f" \
+                        % (epoch, idx, batches_per_epoch, h,m,s, d_loss, g_loss, ae_loss)
+            if epoch % 20 == 0:
+                self.saver.save(self.sess, os.path.join(self.model_dir, 'CycleGAN_CNN.ckpt'), global_step=cnt)
+            if epoch % 10 == 0:
+                self.sample(epoch)
+        self.saver.save(self.sess, os.path.join(self.model_dir, 'CycleGAN_CNN.ckpt'), global_step=cnt)
+
 # c = CycleGAN(
 #     encoder_naive, [128,],
 #     encoder_naive, [128,],
@@ -521,12 +650,16 @@ class CycleGAN(BasicTrainFramework):
 # )
 # dc.train(epoches=100)
 
-dc = Double_Cycle(
-    encoder_naive, [128,],
-    encoder_naive, [128,],
-    datamanager(seed=0),
-    datamanager(seed=1),
-    64,
-    "Double_Cycle"
-)
-dc.train(epoches=20)
+# dc = Double_Cycle(
+#     encoder_naive, [128,],
+#     encoder_naive, [128,],
+#     datamanager(seed=0),
+#     datamanager(seed=1),
+#     64,
+#     "Double_Cycle"
+# )
+# dc.train(epoches=20)
+
+c = CycleGAN_CNN(64, "CycleGAN_CNN")
+
+c.train(epoches=100)

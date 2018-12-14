@@ -39,7 +39,6 @@ class AutoEncoder_RNN(BasicBlock):
 class AutoEncoder_CNN(BasicBlock):
     def __init__(self, name=None):
         name = "AutoEncoder" if name is None else name
-
         super(AutoEncoder_CNN, self).__init__(hidden_units=[],name=name)
     
     def __call__(self, x, lens):
@@ -72,6 +71,70 @@ class AutoEncoder_CNN(BasicBlock):
 
     def get_vars(self, name):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, name)
+
+class ConverterA_CNN(BasicBlock):
+    def __init__(self, name=None):
+        name = "Converter" if name is None else name
+        super(ConverterA_CNN, self).__init__(hidden_units=[],name=name)
+    
+    def __call__(self, x, lens):
+        with tf.variable_scope(self.name):
+            # x [bz, 256, 6, 1]
+            conv = conv2d(x, channel=16, k_h=13, k_w=3, d_h=2, d_w=1, name='conv_0') # [bz, 122, 4, 16]
+            conv = lrelu(conv, name='lrelu_0')
+
+            conv = conv2d(conv, channel=32, k_h=13, k_w=3, d_h=2, d_w=1, name='conv_1') # [bz, 55, 2, 32]
+            conv = lrelu(conv, name='lrelu_1') 
+
+            conv = conv2d(conv, channel=64, k_h=12, k_w=2, d_h=2, d_w=1, name='conv_2') # [bz, 22, 1, 64]
+            conv = lrelu(conv, name='lrelu_2') 
+
+            deconv = deconv2d(conv, channel=32, k_h=12, k_w=1, d_h=2, d_w=1, name='deconv_0') # [bz, 55, 1, 32]
+            deconv = lrelu(deconv, name='lrelu_3')
+
+            deconv = deconv2d(deconv, channel=16, k_h=13, k_w=2, d_h=2, d_w=1, name='deconv_1') # [bz, 122, 2, 16]
+            deconv = lrelu(deconv, name='lrelu_4')
+
+            deconv = deconv2d(deconv, channel=1, k_h=13, k_w=2, d_h=2, d_w=1, name='deconv_2') # [bz, 256, 3, 1]
+            deconv = 2 * tf.nn.tanh(deconv)
+
+            mask = tf.sequence_mask(lens)
+            mask = tf.expand_dims(tf.expand_dims(mask, -1), -1)
+            deconv = tf.multiply(deconv, tf.to_float(mask))
+
+        return deconv
+
+class ConverterB_CNN(BasicBlock):
+    def __init__(self, name=None):
+        name = "Converter" if name is None else name
+        super(ConverterB_CNN, self).__init__(hidden_units=[],name=name)
+    
+    def __call__(self, x, lens):
+        with tf.variable_scope(self.name):
+            # x [bz, 256, 3, 1]
+            conv = conv2d(x, channel=16, k_h=13, k_w=2, d_h=2, d_w=1, name='conv_0') # [bz, 122, 2, 16]
+            conv = lrelu(conv, name='lrelu_0')
+
+            conv = conv2d(conv, channel=32, k_h=13, k_w=2, d_h=2, d_w=1, name='conv_1') # [bz, 55, 1, 32]
+            conv = lrelu(conv, name='lrelu_1') 
+
+            conv = conv2d(conv, channel=64, k_h=12, k_w=1, d_h=2, d_w=1, name='conv_2') # [bz, 22, 1, 64]
+            conv = lrelu(conv, name='lrelu_2') 
+
+            deconv = deconv2d(conv, channel=32, k_h=12, k_w=2, d_h=2, d_w=1, name='deconv_0') # [bz, 55, 2, 32]
+            deconv = lrelu(deconv, name='lrelu_3')
+
+            deconv = deconv2d(deconv, channel=16, k_h=13, k_w=3, d_h=2, d_w=1, name='deconv_1') # [bz, 122, 4, 16]
+            deconv = lrelu(deconv, name='lrelu_4')
+
+            deconv = deconv2d(deconv, channel=1, k_h=13, k_w=3, d_h=2, d_w=1, name='deconv_2') # [bz, 256, 4, 1]
+            deconv = 2 * tf.nn.tanh(deconv)
+
+            mask = tf.sequence_mask(lens)
+            mask = tf.expand_dims(tf.expand_dims(mask, -1), -1)
+            deconv = tf.multiply(deconv, tf.to_float(mask))
+
+        return deconv
 
 class AE(BasicTrainFramework):
     def __init__(self, data, batch_size, version=None):
@@ -192,28 +255,26 @@ class AE(BasicTrainFramework):
             self.sample(epoch)
 
 
-import numpy as np
-from datamanager import datamanager
+# import numpy as np
+# from datamanager import datamanager
 
-ae = AE(datamanager(time_major=False), 64, version="test")
-ae.train(20)
+# ae = AE(datamanager(time_major=False), 64, version="test")
+# ae.train(20)
 
 
-# autoencoder = AutoEncoder_CNN()
+# autoencoder = ConverterB_CNN()
 # source = tf.placeholder(shape=(64, None, 3, 1), dtype=tf.float32)
 # length = tf.placeholder(shape=(64, ), dtype=tf.int32)
 # out = autoencoder(source, length)
 
 # with tf.Session() as sess:
 #     sess.run(tf.global_variables_initializer())
-
-#     weight = tf.global_variables()
-#     for v in weight:
-#         print v
-#     print 
-#     weight = autoencoder.get_vars(os.path.join(autoencoder.name, "conv_0", "weights:0"))
-#     for v in weight:
-#         print v
+#     feed_dict={source: np.random.normal(size=(64,256,3,1)), 
+#                 length:256*np.ones((64,))
+#                 }
+#     y = sess.run(out, feed_dict=feed_dict)
+    
+#     print y.shape
 
 
 

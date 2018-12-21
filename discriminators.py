@@ -107,10 +107,7 @@ class SeqDiscriminator_CNN(BasicBlock):
                 conv = conv2d(conv, channel=18, k_h=13, k_w=1, d_h=2, d_w=1, sn=True, name='conv2') # [bz, 91, 2, 18]
                 conv = lrelu(conv)
             
-            if self.fixed_length:
-                conv = tf.layers.flatten(conv) # [bz, 1056]
-                conv = dense(conv, 128, activation=lrelu, name='fc') # [bz, 128]
-            else:
+            if not self.fixed_length:
                 # mask-meanpooling for inputs of any length
                 assert lens is not None
                 lens = self.get_conv_lens(lens) # get lengths of the last layer's output
@@ -120,15 +117,17 @@ class SeqDiscriminator_CNN(BasicBlock):
                 conv = tf.multiply(conv, tf.to_float(mask))
                 conv = tf.reduce_sum(conv, axis=1) # [bz, 2, 24]
                 conv = tf.divide(conv, tf.to_float(tf.expand_dims(tf.expand_dims(lens, -1), -1))) # [bz, 2, 24]
-                conv = tf.layers.flatten(conv) 
+            
+            conv = tf.layers.flatten(conv) 
+            conv = dense(conv, 128, activation=None, name='fc') # [bz, 128]
                 
             y_d = dense(conv, 1, name='D_dense')
             if self.class_num:
                 y_c = dense(conv, self.class_num, name='C_dense')
-                y_c = tf.nn.softmax(y_c)
+                # y_c = tf.nn.softmax(y_c)
 
         if self.class_num:
-            return y_d, y_c
+            return y_d, conv, y_c
         else:
-            return y_d
+            return y_d, conv
 

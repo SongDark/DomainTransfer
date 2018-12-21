@@ -37,7 +37,7 @@ class encoder_bi(BasicBlock):
     def __init__(self, hidden_units, cell_type='lstm', name=None):
         name = 'bi_encoder' if name is None else name
         super(encoder_bi, self).__init__(hidden_units=hidden_units, name=name)
-
+        self.cell_type = cell_type
         with tf.variable_scope(self.name, reuse=False):
             encoder_fw_cells = gen_rnn_cells(cell_type, hidden_units)
             encoder_bw_cells = gen_rnn_cells(cell_type, hidden_units)
@@ -57,11 +57,14 @@ class encoder_bi(BasicBlock):
             encoder_outputs = tf.concat([encoder_fw_outputs, encoder_bw_outputs], axis=-1) # [T,bz,H] + [T,bz,H] -> [T,bz,2H]
             encoder_last_state = []
             for i in range(len(self.hidden_units)):
-                encoder_last_state_c = tf.concat((encoder_fw_last_states[i].c, encoder_bw_last_states[i].c), axis=1)
-                encoder_last_state_h = tf.concat((encoder_fw_last_states[i].h, encoder_bw_last_states[i].h), axis=1)
-                encoder_last_state.append(tf.nn.rnn_cell.LSTMStateTuple(
-                                            c=encoder_last_state_c,
-                                            h=encoder_last_state_h))
+                if self.cell_type == 'lstm':
+                    encoder_last_state_c = tf.concat((encoder_fw_last_states[i].c, encoder_bw_last_states[i].c), axis=1)
+                    encoder_last_state_h = tf.concat((encoder_fw_last_states[i].h, encoder_bw_last_states[i].h), axis=1)
+                    encoder_last_state.append(tf.nn.rnn_cell.LSTMStateTuple(
+                                                c=encoder_last_state_c,
+                                                h=encoder_last_state_h))
+                else:
+                    encoder_last_state.append(tf.concat([encoder_fw_last_states[i], encoder_bw_last_states[i]], axis=1))
 
             return encoder_outputs, tuple(encoder_last_state)
 

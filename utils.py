@@ -55,10 +55,10 @@ class BasicTrainFramework(object):
 			self.D_solver = tf.train.RMSPropOptimizer(learning_rate=kwargs['lr']).minimize(self.D_loss, var_list=kwargs['discriminator'].vars)
 			self.G_solver = tf.train.RMSPropOptimizer(learning_rate=kwargs['lr']).minimize(self.D_loss, var_list=kwargs['generator'].vars)
 
-	def load_model(self, checkpoint_dir, ckpt_name=None):
+	def load_model(self, checkpoint_dir=None, ckpt_name=None):
 		import re 
 		print "load checkpoints ..."
-		
+		checkpoint_dir = checkpoint_dir or self.model_dir
 		ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
 		if ckpt and ckpt.model_checkpoint_path:
 			ckpt_name = ckpt_name or os.path.basename(ckpt.model_checkpoint_path)
@@ -72,7 +72,7 @@ class BasicTrainFramework(object):
 
 def gen_rnn_cells(cell_type, hidden_units):
     if cell_type == 'rnn':
-        return [tf.nn.rnn_cell.RNNCell(size) for size in hidden_units]
+        return [tf.nn.rnn_cell.BasicRNNCell(size) for size in hidden_units]
     elif cell_type == 'lstm':
         return [tf.nn.rnn_cell.LSTMCell(size, use_peepholes=False) for size in hidden_units]
     elif cell_type == 'gru':

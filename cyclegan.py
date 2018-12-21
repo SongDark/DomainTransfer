@@ -8,6 +8,9 @@ from discriminators import SeqDiscriminator_CNN
 import time, os
 import numpy as np
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+import matplotlib 
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
 
 class Double_Cycle(BasicTrainFramework):
     def __init__(self, 
@@ -507,7 +510,7 @@ class CycleGAN_CNN(BasicTrainFramework):
 
         self.encoder_X = ConverterA_CNN(name="encoder_cnn")
         self.decoder_X = ConverterB_CNN(name="decoder_cnn")
-        self.discriminator = SeqDiscriminator_CNN(class_num=None, mode=1, fixed_length=False, name='discriminator')
+        self.discriminator = SeqDiscriminator_CNN(class_num=62, mode=1, fixed_length=False, name='discriminator')
 
         self.data_X = datamanager(time_major=False, seed=19940610)
         self.data_Y = datamanager(time_major=False, seed=19940610)
@@ -529,11 +532,13 @@ class CycleGAN_CNN(BasicTrainFramework):
         with tf.variable_scope("placeholders"):
             self.source_X = tf.placeholder(shape=(self.batch_size, None, 6, 1), dtype=tf.float32)
             self.len_X = tf.placeholder(shape=(self.batch_size, ), dtype=tf.int32)
+            self.mid_X = tf.placeholder(shape=(self.batch_size, None, 3, 1), dtype=tf.float32)
             self.target_X = tf.placeholder(shape=(self.batch_size, None, 6, 1), dtype=tf.float32)
-            # self.label_X = tf.placeholder(shape=(self.batch_size, 62), dtype=tf.float32)
+            self.label_X = tf.placeholder(shape=(self.batch_size, 62), dtype=tf.float32)
 
             self.source_Y = tf.placeholder(shape=(self.batch_size, None, 3, 1), dtype=tf.float32)
             self.len_Y = tf.placeholder(shape=(self.batch_size, ), dtype=tf.int32)
+            self.label_Y = tf.placeholder(shape=(self.batch_size, 62), dtype=tf.float32)
         
     def build_ae(self):
         self.encoder_outputs = self.encoder_X(self.source_X, self.len_X)
@@ -541,27 +546,34 @@ class CycleGAN_CNN(BasicTrainFramework):
         self.decoder_outputs = self.decoder_X(self.encoder_outputs, self.len_X)
         
     def build_gan(self):
-        self.D_logit_real = self.discriminator(self.source_Y, self.len_Y, reuse=False)
-        self.D_logit_fake = self.discriminator(self.encoder_outputs, self.len_X, reuse=True)
+        self.D_logit_real, _, self.D_cls_real = self.discriminator(self.source_Y, self.len_Y, reuse=False)
+        self.D_logit_fake, _, self.D_cls_fake = self.discriminator(self.encoder_outputs, self.len_X, reuse=True)
     
     def build_optimizer(self):
         # cycle consistency
         self.ae_loss = tf.reduce_mean(tf.square(self.target_X - self.decoder_outputs))
+        self.transform_loss = tf.reduce_sum(tf.square(self.encoder_outputs - self.mid_X))
         
         # wgan
         self.D_loss_real = - tf.reduce_mean(self.D_logit_real)
         self.D_loss_fake = tf.reduce_mean(self.D_logit_fake) 
         self.D_loss = self.D_loss_real + self.D_loss_fake
         self.G_loss = - self.D_loss_fake
-
         # weights clipping
-        self.D_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in self.discriminator.vars]
+        self.D_clip = [p.assign(tf.clip_by_value(p, -0.2, 0.2)) for p in self.discriminator.vars]
+
+        # classifier
+        self.C_loss_fake = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.label_X, logits=self.D_cls_fake))
+        self.C_loss_real = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.label_Y, logits=self.D_cls_real))
+        self.C_loss = self.C_loss_fake + self.C_loss_real
 
         # solvers 
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             self.ae_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.ae_loss, var_list=self.encoder_X.vars + self.decoder_X.vars)
             self.D_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.D_loss, var_list=self.discriminator.vars)
             self.G_solver = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5).minimize(self.G_loss, var_list=self.encoder_X.vars)
+            self.C_solver_real = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.C_loss_real, var_list=self.discriminator.vars)
+            self.C_solver_fake = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(self.C_loss_fake, var_list=self.encoder_X.vars)
 
     def build_summary(self):
         ae_loss_sum = tf.summary.scalar("ae_loss", self.ae_loss)
@@ -585,7 +597,40 @@ class CycleGAN_CNN(BasicTrainFramework):
 
         data_X['enX_outputs'], data_X['deX_outputs'] = self.sess.run([self.encoder_outputs, self.decoder_outputs], feed_dict=feed_dict)
         np.savez(os.path.join(self.fig_dir, "sample_epoch_{}.npz".format(epoch)), **data_X)
+        
+        ori, lens, pred = data_X['XYZ'], data_X['lens'], data_X["enX_outputs"][:,:,:,0]
 
+        indexes, tmp = [], {}
+        for i, label in enumerate(np.argmax(data_X['labels'], axis=1)):
+            if not tmp.has_key(label):
+                indexes.append(i)
+                tmp[label] = 0
+        for i in range(4):
+            for j in range(3):
+                idx = i*3 + j
+                pic_idx = indexes[idx]
+                plt.subplot(4,6, idx*2+1)
+                plt.plot(ori[pic_idx, :lens[pic_idx], 0], ori[pic_idx, :lens[pic_idx], 1], color='g')
+                plt.xticks([])
+                plt.subplot(4,6, idx*2+2)
+                plt.plot(pred[pic_idx, :lens[pic_idx], 0], pred[pic_idx, :lens[pic_idx], 1], color='r')
+                plt.xticks([])
+        plt.savefig(os.path.join(self.fig_dir, "sample_epoch_{}.png".format(epoch)))
+        plt.clf()
+    def test(self):
+        data = datamanager(time_major=False)
+        loss = 0
+        for _ in range(107):
+            X = self.data_X(self.batch_size, var_list=["lens", "AccGyo", "XYZ"])
+            feed_dict = {
+                    self.source_X: X["AccGyo"][:,:,:,None],
+                    self.len_X: X["lens"],
+                    self.target_X: X["AccGyo"][:,:,:,None],
+                    self.mid_X: X["XYZ"][:,:,:,None]
+            }
+            loss += self.sess.run(self.transform_loss, feed_dict=feed_dict)
+        loss /= float(107 * self.batch_size)
+        print loss
     def train(self, epoches=10):
         self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
@@ -593,40 +638,60 @@ class CycleGAN_CNN(BasicTrainFramework):
 
         start_time = time.time()
         for epoch in range(epoches):
+            self.data_X.shuffle_train()
+            self.data_Y.shuffle_train()
             for idx in range(batches_per_epoch):
                 cnt = batches_per_epoch * epoch + idx
 
-                X = self.data_X(self.batch_size, var_list=["lens", "AccGyo"])
-                Y = self.data_Y(self.batch_size, var_list=["lens", "XYZ"])
+                X = self.data_X(self.batch_size, var_list=["lens", "AccGyo", "XYZ", 'labels'])
+                Y = self.data_Y(self.batch_size, var_list=["lens", "XYZ", "labels"])
 
                 feed_dict = {
                     self.source_X: X["AccGyo"][:,:,:,None],
                     self.len_X: X["lens"],
                     self.target_X: X["AccGyo"][:,:,:,None],
+                    self.mid_X: X["XYZ"][:,:,:,None],
+                    self.label_X: X["labels"],
 
                     self.source_Y: Y["XYZ"][:,:,:,None],
-                    self.len_Y: Y["lens"]
+                    self.len_Y: Y["lens"],
+                    self.label_Y: Y["labels"]
                 }
                 
-                # update cycle consistency & D network
-                self.sess.run([self.ae_solver, self.D_solver, self.D_clip], feed_dict=feed_dict)
+                # update cycle consistency 
+                if (cnt - 1) % 2 == 0:
+                    self.sess.run(self.ae_solver, feed_dict=feed_dict)
+
+                # classifier
+                self.sess.run(self.C_solver_real, feed_dict=feed_dict)
+                for _ in range(2):
+                    self.sess.run(self.C_solver_fake, feed_dict=feed_dict)
+
+
+                # D network
+                for _ in range(2):
+                    # self.sess.run([self.D_solver, self.D_clip], feed_dict=feed_dict)
+                    self.sess.run([self.D_solver, ], feed_dict=feed_dict)
 
                 # update G network
-                if (cnt - 1) % 1 == 0:
+                for _ in range(1):
                     self.sess.run(self.G_solver, feed_dict=feed_dict)
                 
                 if (cnt - 1) % 5 == 0:
-                    ae_sum, d_sum, g_sum, g_loss, d_loss, ae_loss = self.sess.run([self.ae_sum, self.d_sum, self.g_sum, self.G_loss, self.D_loss, self.ae_loss], feed_dict=feed_dict)
+                    ae_sum, d_sum, g_sum, g_loss, d_loss, ae_loss, c_loss_real, c_loss_fake = self.sess.run([self.ae_sum, self.d_sum, self.g_sum, self.G_loss, self.D_loss, self.ae_loss, self.C_loss_real, self.C_loss_fake], feed_dict=feed_dict)
                     self.writer.add_summary(ae_sum, cnt)
                     self.writer.add_summary(d_sum, cnt)
                     self.writer.add_summary(g_sum, cnt)
                     h,m,s = logging_time(time.time() - start_time)
-                    print "Epoch: [%2d] [%4d/%4d] time: %3d:%3d:%3d, d_loss:%.5f, g_loss:%.5f, ae_loss:%.5f" \
-                        % (epoch, idx, batches_per_epoch, h,m,s, d_loss, g_loss, ae_loss)
+                    print "Epoch: [%2d] [%4d/%4d] time: %3d:%3d:%3d, d_loss:%.4f, g_loss:%.4f, ae_loss:%.4f, c_loss=%.4f, %.4f" \
+                        % (epoch, idx, batches_per_epoch, h,m,s, d_loss, g_loss, ae_loss, c_loss_real, c_loss_fake)
+                    
             if epoch % 20 == 0:
                 self.saver.save(self.sess, os.path.join(self.model_dir, 'CycleGAN_CNN.ckpt'), global_step=cnt)
             if epoch % 10 == 0:
                 self.sample(epoch)
+            self.test()
+        self.sample(epoch)
         self.saver.save(self.sess, os.path.join(self.model_dir, 'CycleGAN_CNN.ckpt'), global_step=cnt)
 
 # c = CycleGAN(
@@ -662,4 +727,4 @@ class CycleGAN_CNN(BasicTrainFramework):
 
 c = CycleGAN_CNN(64, "CycleGAN_CNN")
 
-c.train(epoches=100)
+c.train(epoches=200)

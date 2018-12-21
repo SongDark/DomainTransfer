@@ -19,6 +19,7 @@ class dynamic_decoder(BasicBlock):
         name = "dynamic_{}_decoder".format(cell_type) if name is None else name
         super(dynamic_decoder, self).__init__(hidden_units=hidden_units, name=name)
         self.output_depth = output_depth
+        self.cell_type = cell_type
 
         # Output Projection
         with tf.variable_scope(self.name):
@@ -44,9 +45,12 @@ class dynamic_decoder(BasicBlock):
             for i in range(len(self.hidden_units)):
                 '''project embedding to each layers initial state'''
                 state = dense(embedding, self.hidden_units[i], name='dense_input_{}'.format(i))
-                initial_cell_state.append(tf.nn.rnn_cell.LSTMStateTuple(
-                    c=state, 
-                    h=tf.zeros_like(state)))
+                if self.cell_type == 'lstm':
+                    initial_cell_state.append(tf.nn.rnn_cell.LSTMStateTuple(
+                        c=state, 
+                        h=tf.zeros_like(state)))
+                else:
+                    initial_cell_state.append(state)
             
             return (initial_elements_finished, 
                     initial_input,
